@@ -70,8 +70,9 @@
   .split-btn{background:#000;color:#fff;border:none;font-family:inherit;font-weight:700;font-size:10.5px;letter-spacing:.3px;padding:6px 10px;border-radius:2px;cursor:pointer;}
   .split-btn:hover{background:#333;}
   .tile.selected{box-shadow:0 0 0 3px #000;}
-  .tile .x{position:absolute;top:-9px;right:-9px;width:18px;height:18px;border-radius:50%;background:#000;color:#fff;font-size:10px;border:1px solid #000;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:1;font-family:inherit;font-weight:700;}
-  .tile .cp{position:absolute;top:-9px;left:-9px;width:17px;height:17px;border-radius:50%;background:#000;color:#fff;font-size:8px;border:1px solid #000;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:1;font-family:inherit;font-weight:700;}
+  .tile .x{position:absolute;top:-9px;right:-9px;width:18px;height:18px;border-radius:50%;background:#000;color:#fff;font-size:10px;border:1px solid #000;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity .12s ease;font-family:inherit;font-weight:700;}
+  .tile .cp{position:absolute;top:-9px;left:-9px;width:17px;height:17px;border-radius:50%;background:#000;color:#fff;font-size:8px;border:1px solid #000;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity .12s ease;font-family:inherit;font-weight:700;}
+  .tile.selected .x,.tile.selected .cp,.tile:hover .x,.tile:hover .cp,.tile:focus-within .x,.tile:focus-within .cp{opacity:1;}
   .tile input{font-family:inherit;font-weight:inherit;font-size:inherit;color:inherit;background:transparent;border:none;outline:none;border-bottom:1px dashed #000;width:auto;}
 
   /* ---------- listening banner ---------- */
@@ -198,7 +199,7 @@
   <div class="main">
     <div class="board-wrap">
       <div class="board" id="board">
-        <div class="aside-zone"><div class="aside-label">Off to the side</div><div class="aside-hint">&#8984;/Ctrl + drag = duplicate &middot; the &times; always deletes</div></div>
+        <div class="aside-zone"><div class="aside-label">Off to the side</div><div class="aside-hint">Tap a word for copy/delete &middot; &#8984;/Ctrl + drag = duplicate</div></div>
         <div class="empty-msg" id="emptyMsg">Empty board.<br>Type a word, a line, or paste a whole paragraph above — or hit Record and just talk.</div>
         <div class="rec-banner" id="recBanner"></div>
       </div>
@@ -488,10 +489,15 @@
       showToast('Duplicated \u2014 drag it wherever you want');
     }
     el.setPointerCapture(e.pointerId);
-    el.classList.add('dragging');
-    el.style.zIndex = ++zTop;
     var rect = board.getBoundingClientRect();
+    var startX = e.clientX, startY = e.clientY, moved = false;
     function move(ev){
+      if(!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4){
+        moved = true;
+        el.classList.add('dragging');
+        el.style.zIndex = ++zTop;
+      }
+      if(!moved) return;
       var xPct = clamp(((ev.clientX - rect.left) / rect.width) * 100, 1, 99);
       var yPct = Math.max(3, ((ev.clientY - rect.top + board.scrollTop) / rect.height) * 100);
       w.x = xPct; w.y = yPct;
@@ -499,16 +505,21 @@
     }
     function up(){
       el.classList.remove('dragging');
-      if(gridOn){
-        var snapped = snapToGridPct(w.x, w.y);
-        w.x = clamp(snapped.x, 1, 99);
-        w.y = Math.max(3, snapped.y);
-        el.style.left = w.x + '%'; el.style.top = w.y + '%';
+      if(moved){
+        if(gridOn){
+          var snapped = snapToGridPct(w.x, w.y);
+          w.x = clamp(snapped.x, 1, 99);
+          w.y = Math.max(3, snapped.y);
+          el.style.left = w.x + '%'; el.style.top = w.y + '%';
+        }
+        saveState();
+      } else {
+        selectedId = (selectedId === w.id) ? null : w.id;
+        renderBoard();
       }
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
       el.removeEventListener('pointercancel', up);
-      saveState();
     }
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
@@ -517,14 +528,25 @@
 
   // ---------- adding words from typed / pasted / spoken text ----------
   // A flow cursor lays words left-to-right like a sentence wrapping — each
-  // word's actual rendered width is measured so they sit snug next to each
-  // other (not spread across a fixed grid), wrapping to a new line when a
-  // row is full. It starts below whatever is already on the board, so a
-  // second recording or split doesn't land on top of existing words.
+  // word's actual rendered width is measured (using a real hidden tile
+  // element, so it exactly matches this device/browser's font rendering)
+  // so they sit snug next to each other and wrap correctly, on any screen
+  // size. It starts below whatever is already on the board, so a second
+  // recording or split doesn't land on top of existing words.
+  var measureEl = null;
   function measureWordPx(text){
-    var ctx = measureWordPx._ctx || (measureWordPx._ctx = document.createElement('canvas').getContext('2d'));
-    ctx.font = "700 15px 'Helvetica Neue', Helvetica, Arial, sans-serif";
-    return ctx.measureText(text).width + 26; // + tile padding/border
+    if(!measureEl){
+      measureEl = document.createElement('div');
+      measureEl.className = 'tile';
+      measureEl.style.position = 'fixed';
+      measureEl.style.left = '-9999px';
+      measureEl.style.top = '-9999px';
+      measureEl.style.visibility = 'hidden';
+      measureEl.style.whiteSpace = 'nowrap';
+      document.body.appendChild(measureEl);
+    }
+    measureEl.textContent = text;
+    return measureEl.getBoundingClientRect().width + 10;
   }
 
   function makeFlowCursor(){
@@ -1128,6 +1150,9 @@
   function closeSidebarOnMobile(){ if(window.innerWidth <= 760) closeSidebar(); }
   document.getElementById('sideToggle').addEventListener('click', function(){ sidebar.classList.contains('open') ? closeSidebar() : openSidebar(); });
   scrim.addEventListener('click', closeSidebar);
+  board.addEventListener('click', function(e){
+    if(!e.target.closest('.tile') && selectedId){ selectedId = null; renderBoard(); }
+  });
 
   function showTab(name){
     document.querySelectorAll('.tab').forEach(function(t){ t.classList.toggle('active', t.dataset.tab === name); });
