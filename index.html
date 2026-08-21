@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Songboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='black'/%3E%3Ctext x='50' y='70' font-family='Helvetica,Arial,sans-serif' font-size='58' font-weight='700' fill='white' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='black'/%3E%3Ctext x='50' y='70' font-family='Helvetica,Arial,sans-serif' font-size='58' font-weight='700' fill='white' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Songboard">
 <style>
   :root{
     --ink:#000; --paper:#fff; --gray-1:#f2f2f2; --gray-3:#bdbdbd; --gray-4:#8a8a8a; --line:#ddd;
@@ -65,10 +69,9 @@
   .block-controls{margin-top:8px;display:flex;justify-content:flex-end;}
   .split-btn{background:#000;color:#fff;border:none;font-family:inherit;font-weight:700;font-size:10.5px;letter-spacing:.3px;padding:6px 10px;border-radius:2px;cursor:pointer;}
   .split-btn:hover{background:#333;}
-  .tile .x,.tile .cp{position:absolute;top:-9px;width:17px;height:17px;border-radius:50%;background:#000;color:#fff;font-size:9px;border:1px solid #000;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity .12s ease;font-family:inherit;font-weight:700;}
-  .tile .x{right:-9px;}
-  .tile .cp{left:-9px;font-size:8px;}
-  .tile:hover .x,.tile:focus-within .x,.tile:hover .cp,.tile:focus-within .cp{opacity:1;}
+  .tile.selected{box-shadow:0 0 0 3px #000;}
+  .tile .x{position:absolute;top:-9px;right:-9px;width:18px;height:18px;border-radius:50%;background:#000;color:#fff;font-size:10px;border:1px solid #000;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:1;font-family:inherit;font-weight:700;}
+  .tile .cp{position:absolute;top:-9px;left:-9px;width:17px;height:17px;border-radius:50%;background:#000;color:#fff;font-size:8px;border:1px solid #000;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:1;font-family:inherit;font-weight:700;}
   .tile input{font-family:inherit;font-weight:inherit;font-size:inherit;color:inherit;background:transparent;border:none;outline:none;border-bottom:1px dashed #000;width:auto;}
 
   /* ---------- listening banner ---------- */
@@ -102,7 +105,7 @@
   .idx-letter.active{background:#fff;color:#000;}
   .idx-group{margin-bottom:10px;}
   .idx-group h3{font-size:11px;letter-spacing:1.4px;color:#666;margin:0 0 4px;font-weight:700;}
-  .idx-word{display:block;width:100%;text-align:left;background:transparent;border:none;border-bottom:1px solid #222;color:#fff;font-family:inherit;font-size:13px;padding:6px 2px;cursor:pointer;}
+  .idx-word{display:block;width:100%;text-align:left;background:transparent;border:none;border-bottom:1px solid #222;color:#fff;font-family:inherit;font-size:13px;padding:6px 2px;cursor:grab;touch-action:none;}
   .idx-word:hover{background:#161616;}
 
   .boards-head{padding:10px 12px 6px;display:flex;justify-content:space-between;align-items:center;gap:6px;}
@@ -195,7 +198,7 @@
   <div class="main">
     <div class="board-wrap">
       <div class="board" id="board">
-        <div class="aside-zone"><div class="aside-label">Off to the side</div><div class="aside-hint">&#8984; / Ctrl + drag a tile to duplicate it</div></div>
+        <div class="aside-zone"><div class="aside-label">Off to the side</div><div class="aside-hint">&#8984;/Ctrl + drag = duplicate &middot; the &times; always deletes</div></div>
         <div class="empty-msg" id="emptyMsg">Empty board.<br>Type a word, a line, or paste a whole paragraph above — or hit Record and just talk.</div>
         <div class="rec-banner" id="recBanner"></div>
       </div>
@@ -217,6 +220,7 @@
       </div>
 
       <div class="panel" id="panelIndex">
+        <div class="panel-head" style="padding-bottom:0;">Drag a word onto the board to reuse it</div>
         <div class="idx-letters" id="idxLetters"></div>
         <div class="idx-list" id="idxList">
           <div class="idx-empty">Words you add will show up here, alphabetically, so you can find one fast.</div>
@@ -268,6 +272,8 @@
   var MAX_SNAPSHOTS = 60;
   var MAX_UNDO = 30;
   var ASIDE_PCT = 22;
+  var GRID_STEP_X = 48; // px — comfortable column spacing
+  var GRID_STEP_Y = 32; // px — matches the drawn lined-paper spacing exactly
   var AUTO_CHECKPOINT_MS = 90000;
   var CLIP_MAX_BYTES = 2200000; // ~2.2MB raw audio -> keeps base64 comfortably under the 5MB storage cap
   function boardKey(id){ return 'songboard_board_' + id; }
@@ -303,6 +309,7 @@
   var modalTargetId = null;
   var undoStack = [];
   var gridOn = false;
+  var selectedId = null;
   var lastAutoSnapJSON = null;
 
   function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -317,14 +324,19 @@
   }
 
   // ---------- persistence ----------
+  // Uses the browser's own localStorage, so this works as a plain hosted
+  // page (GitHub Pages, or any static host) — not just inside Claude.
+  // Each device/browser keeps its own saved boards; there's no sync between
+  // your Mac and your phone unless you export/import a board manually.
   async function safeGet(key){
-    try{ var r = await window.storage.get(key, false); return r ? JSON.parse(r.value) : null; }
+    try{ var v = localStorage.getItem(key); return v !== null ? JSON.parse(v) : null; }
     catch(e){ return null; }
   }
   async function safeSet(key, value){
-    try{ await window.storage.set(key, JSON.stringify(value), false); return true; }catch(e){ return false; }
+    try{ localStorage.setItem(key, JSON.stringify(value)); return true; }
+    catch(e){ return false; } // e.g. storage quota exceeded
   }
-  async function safeDelete(key){ try{ await window.storage.delete(key, false); }catch(e){} }
+  async function safeDelete(key){ try{ localStorage.removeItem(key); }catch(e){} }
 
   function saveState(){
     safeSet(boardKey(currentId), words);
@@ -332,7 +344,7 @@
     if(entry){ entry.updatedAt = Date.now(); entry.count = words.length; safeSet(BOARDS_INDEX_KEY, boardsIndex); }
   }
   function saveSnaps(){ safeSet(snapKey(currentId), snapshots); }
-  function saveClips(){ safeSet(clipKey(currentId), clips); }
+  function saveClips(){ return safeSet(clipKey(currentId), clips); }
 
   // ---------- undo ----------
   function pushUndo(){
@@ -362,7 +374,7 @@
 
   function renderTile(w){
     var el = document.createElement('div');
-    el.className = 'tile' + (w.type === 'block' ? ' block' : '');
+    el.className = 'tile' + (w.type === 'block' ? ' block' : '') + (selectedId === w.id ? ' selected' : '');
     el.style.left = w.x + '%';
     el.style.top = w.y + '%';
     el.dataset.id = w.id;
@@ -432,12 +444,21 @@
     input.addEventListener('pointerdown', function(e){ e.stopPropagation(); });
   }
 
+  function snapToGridPct(xPct, yPct){
+    var rect = board.getBoundingClientRect();
+    if(!rect.width || !rect.height) return { x: xPct, y: yPct };
+    var xPx = (xPct/100)*rect.width, yPx = (yPct/100)*rect.height;
+    xPx = Math.round(xPx/GRID_STEP_X) * GRID_STEP_X;
+    yPx = Math.round(yPx/GRID_STEP_Y) * GRID_STEP_Y;
+    return { x: (xPx/rect.width)*100, y: (yPx/rect.height)*100 };
+  }
+
   function addWord(text, xOverride, yOverride){
     text = text.trim();
     if(!text) return;
     var x = xOverride !== undefined ? xOverride : clamp(ASIDE_PCT + 12 + Math.random()*55, ASIDE_PCT+6, 96);
     var y = yOverride !== undefined ? yOverride : clamp(15 + Math.random()*65, 8, 92);
-    if(gridOn){ x = Math.round(x/5)*5; y = Math.round(y/6)*6; }
+    if(gridOn){ var snapped = snapToGridPct(x,y); x = snapped.x; y = snapped.y; }
     words.push({ id: uid(), type: 'word', text: text, x: clamp(x,ASIDE_PCT+3,97), y: Math.max(3,y) });
   }
 
@@ -455,9 +476,9 @@
     saveState(); renderBoard();
   }
 
-  function startDrag(e, el, w){
+  function startDrag(e, el, w, skipUndo){
     if(e.pointerType === 'mouse' && e.button !== 0) return;
-    pushUndo();
+    if(!skipUndo) pushUndo();
     if(e.metaKey || e.ctrlKey){
       var copy = { id: uid(), type: w.type, text: w.text, x: w.x, y: w.y };
       words.push(copy);
@@ -479,8 +500,9 @@
     function up(){
       el.classList.remove('dragging');
       if(gridOn){
-        w.x = clamp(Math.round(w.x/5)*5, 1, 99);
-        w.y = clamp(Math.round(w.y/6)*6, 3, 97);
+        var snapped = snapToGridPct(w.x, w.y);
+        w.x = clamp(snapped.x, 1, 99);
+        w.y = Math.max(3, snapped.y);
         el.style.left = w.x + '%'; el.style.top = w.y + '%';
       }
       el.removeEventListener('pointermove', move);
@@ -494,26 +516,43 @@
   }
 
   // ---------- adding words from typed / pasted / spoken text ----------
-  // A flow cursor lays words left-to-right, top-to-bottom, in reading order.
-  // Row height is fixed (not squeezed to fit), so the board just grows taller
-  // and scrolls for long text instead of piling words on top of each other.
+  // A flow cursor lays words left-to-right like a sentence wrapping — each
+  // word's actual rendered width is measured so they sit snug next to each
+  // other (not spread across a fixed grid), wrapping to a new line when a
+  // row is full. It starts below whatever is already on the board, so a
+  // second recording or split doesn't land on top of existing words.
+  function measureWordPx(text){
+    var ctx = measureWordPx._ctx || (measureWordPx._ctx = document.createElement('canvas').getContext('2d'));
+    ctx.font = "700 15px 'Helvetica Neue', Helvetica, Arial, sans-serif";
+    return ctx.measureText(text).width + 26; // + tile padding/border
+  }
+
   function makeFlowCursor(){
-    var cols = 6;
-    var zoneLeft = ASIDE_PCT + 8, zoneRight = 96;
-    var colW = (zoneRight - zoneLeft) / cols;
-    var rowH = 9;
-    var idx = 0;
-    return function(){
-      var col = idx % cols, row = Math.floor(idx / cols);
-      idx++;
-      return { x: clamp(zoneLeft + col*colW + colW/2, ASIDE_PCT+4, 97), y: 8 + row*rowH };
+    var rect = board.getBoundingClientRect();
+    var rectW = rect.width || 900, rectH = rect.height || 600;
+    var zoneLeftPx = rectW * (ASIDE_PCT/100) + 16;
+    var zoneRightPx = rectW - 16;
+    var lineHeightPx = 44, gapPx = 8;
+    var xPx = zoneLeftPx;
+    var maxYPct = 6;
+    words.forEach(function(w){ if(w.y > maxYPct) maxYPct = w.y; });
+    var yPx = (maxYPct/100) * rectH + (words.length ? lineHeightPx * 1.6 : lineHeightPx * 0.4);
+    return function(word){
+      var w = measureWordPx(word);
+      if(xPx + w > zoneRightPx && xPx > zoneLeftPx){ xPx = zoneLeftPx; yPx += lineHeightPx; }
+      var centerX = xPx + w/2, centerY = yPx;
+      xPx += w + gapPx;
+      return {
+        x: clamp((centerX/rectW)*100, ASIDE_PCT+3, 98),
+        y: Math.max(4, (centerY/rectH)*100)
+      };
     };
   }
 
   function placeTokensGrid(tokens){
     var next = makeFlowCursor();
     tokens.forEach(function(tok){
-      var pos = next();
+      var pos = next(tok);
       addWord(tok, pos.x, pos.y);
     });
   }
@@ -647,6 +686,19 @@
         var row = document.createElement('button'); row.className = 'idx-word'; row.type = 'button';
         row.innerHTML = w.text.replace(/</g,'&lt;');
         row.addEventListener('click', function(){ flashWord(w.text); closeSidebarOnMobile(); });
+        row.addEventListener('pointerdown', function(e){
+          if(e.pointerType === 'mouse' && e.button !== 0) return;
+          e.preventDefault();
+          pushUndo();
+          var rect = board.getBoundingClientRect();
+          var xPct = clamp(((e.clientX - rect.left) / rect.width) * 100, 1, 99);
+          var yPct = Math.max(3, ((e.clientY - rect.top + board.scrollTop) / rect.height) * 100);
+          var copy = { id: uid(), type: 'word', text: w.text, x: xPct, y: yPct };
+          words.push(copy);
+          renderBoard();
+          var newEl = board.querySelector('.tile[data-id="' + copy.id + '"]');
+          if(newEl) startDrag(e, newEl, copy, true);
+        });
         group.appendChild(row);
       });
       idxList.appendChild(group);
@@ -905,7 +957,7 @@
               if(i >= lastFinalIndex){
                 var toks = t.trim().split(/\s+/).filter(Boolean);
                 if(toks.length){
-                  toks.forEach(function(tok){ var pos = recFlowNext(); addWord(tok, pos.x, pos.y); });
+                  toks.forEach(function(tok){ var pos = recFlowNext(tok); addWord(tok, pos.x, pos.y); });
                   recWordsAdded += toks.length; renderBoard();
                 }
                 lastFinalIndex = i + 1;
@@ -966,10 +1018,20 @@
       return;
     }
     var reader = new FileReader();
-    reader.onload = function(){
+    reader.onload = async function(){
       var clip = { id: uid(), name: 'Recording ' + new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}), ts: Date.now(), dataUrl: reader.result };
       clips.unshift(clip);
-      saveClips();
+      var ok = await saveClips();
+      if(!ok){
+        clips.shift();
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a'); a.href = url;
+        var stamp = new Date().toISOString().slice(0,16).replace(/[T:]/g,'-');
+        a.download = 'songboard-clip-' + stamp + '.webm';
+        document.body.appendChild(a); a.click(); a.remove();
+        showToast('Storage is full \u2014 downloaded the clip instead. Delete an old clip to free up space.');
+        return;
+      }
       renderClips();
       showToast('Clip saved to this board');
     };
